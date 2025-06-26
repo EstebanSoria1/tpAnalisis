@@ -1,216 +1,199 @@
 <?php
+session_start();
+
 // Conexión a la base de datos
-$conexion = new mysqli('localhost', 'root', '', 'edificio');
+$conexion = new mysqli("localhost", "root", "", "listadopersonasedificio");
 if ($conexion->connect_error) {
     die("Conexión fallida: " . $conexion->connect_error);
 }
 
-// Registro de entrada
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
+// Cierre de sesión
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: index.php");
+    exit();
+}
+
+// Mensajes
+$mensajeLogin = "";
+$mensajeRegistroUsuario = "";
+$mensajeRegistroVisita = "";
+
+// Registro de usuario (crear cuenta)
+if (isset($_POST['crear_usuario'])) {
+    $nuevoUsuario = $_POST['nuevo_usuario']; // DNI
+    $nuevaContrasena = $_POST['nueva_contrasena'];
+
+    $verificar = $conexion->prepare("SELECT * FROM usuarios WHERE usuario = ?");
+    $verificar->bind_param("s", $nuevoUsuario);
+    $verificar->execute();
+    $resultado = $verificar->get_result();
+
+    if ($resultado->num_rows > 0) {
+        $mensajeRegistroUsuario = "Ese DNI ya está registrado como usuario.";
+    } else {
+        $stmt = $conexion->prepare("INSERT INTO usuarios (usuario, contrasena) VALUES (?, SHA2(?, 256))");
+        $stmt->bind_param("ss", $nuevoUsuario, $nuevaContrasena);
+        if ($stmt->execute()) {
+            $mensajeRegistroUsuario = "Cuenta creada. Ahora podés iniciar sesión.";
+        } else {
+            $mensajeRegistroUsuario = "Error al crear la cuenta.";
+        }
+        $stmt->close();
+    }
+}
+
+// Login
+if (isset($_POST['login'])) {
+    $usuario = $_POST['usuario']; // DNI
+    $contrasena = $_POST['contrasena'];
+
+    $stmt = $conexion->prepare("SELECT * FROM usuarios WHERE usuario = ? AND contrasena = SHA2(?, 256)");
+    $stmt->bind_param("ss", $usuario, $contrasena);
+    $stmt->execute();
+    $resultado = $stmt->get_result();
+
+    if ($resultado->num_rows === 1) {
+        $_SESSION['autenticado'] = true;
+        $_SESSION['usuario'] = $usuario;
+    } else {
+        $mensajeLogin = "DNI o contraseña incorrectos.";
+    }
+    $stmt->close();
+}
+
+// Registro de visita
+if (isset($_POST['registrar']) && isset($_SESSION['autenticado'])) {
     $nombre = $_POST['nombre'];
     $apellido = $_POST['apellido'];
     $dni = $_POST['dni'];
-    $motivoVisita = $_POST['motivo_visita'];
-    $personaQueVisita = $_POST['persona_visita'];
-    $ingreso = date('Y-m-d H:i:s');
+    $motivo = $_POST['motivo'];
+    $fecha = $_POST['fecha'];
 
-    $stmt = $conexion->prepare("INSERT INTO personas (nombre, apellido, dni, motivoVisita, personaQueVisita, ingreso) VALUES (?, ?, ?, ?, ?, ?)");
-    $stmt->bind_param("ssssss", $nombre, $apellido, $dni, $motivoVisita, $personaQueVisita, $ingreso);
-    $stmt->execute();
+    $sql = "INSERT INTO visitas (nombre, apellido, dni, motivo, fecha)
+            VALUES (?, ?, ?, ?, ?)";
+    $stmt = $conexion->prepare($sql);
+    $stmt->bind_param("sssss", $nombre, $apellido, $dni, $motivo, $fecha);
+
+    if ($stmt->execute()) {
+        $mensajeRegistroVisita = "Visita registrada exitosamente.";
+    } else {
+        $mensajeRegistroVisita = "Error al registrar visita.";
+    }
     $stmt->close();
 }
 
-// Actualizar hora de salida
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['actualizar'])) {
-    $dni = $_POST['dni_salida'];
-    $egreso = date('Y-m-d H:i:s');
-
-    $stmt = $conexion->prepare("UPDATE personas SET egreso = ? WHERE dni = ?");
-    $stmt->bind_param("ss", $egreso, $dni);
-    $stmt->execute();
-    $stmt->close();
-}
-
-// Filtrado y listado
-$personas = [];
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['filtrar'])) {
-    $filtro = $_GET['filtro'];
-    $valor = $_GET['valor'];
-
-    if ($filtro === 'dni') {
-        $stmt = $conexion->prepare("SELECT * FROM personas WHERE dni LIKE ?");
-        $valor = "%$valor%";
-        $stmt->bind_param("s", $valor);
-    } elseif ($filtro === 'fecha') {
-        $stmt = $conexion->prepare("SELECT * FROM personas WHERE DATE(ingreso) = ?");
-        $stmt->bind_param("s", $valor);
-    }
-    $stmt->execute();
-    $result = $stmt->get_result();
-    while ($row = $result->fetch_assoc()) {
-        $personas[] = $row;
-    }
-    $stmt->close();
-} else {
-    $result = $conexion->query("SELECT * FROM personas");
-    while ($row = $result->fetch_assoc()) {
-        $personas[] = $row;
-    }
-}
-
-$seccion = $_GET['seccion'] ?? '';
+// Listado de visitas
+$visitas = $conexion->query("SELECT * FROM visitas ORDER BY fecha DESC");
 ?>
 
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Registro de Invitados</title>
-    <link rel="icon" type="image/x-icon" href="assets/img/favicon.ico" />
-    <script src="https://use.fontawesome.com/releases/v6.3.0/js/all.js" crossorigin="anonymous"></script>
-    <link href="https://fonts.googleapis.com/css?family=Saira+Extra+Condensed:500,700" rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/css?family=Muli:400,400i,800,800i" rel="stylesheet" />
+    <meta charset="UTF-8">
+    <title>Sistema de Registro</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <link href="css/styles.css" rel="stylesheet" />
+    <link href="C:\xampp\htdocs\prueba\css\styles.css" rel="stylesheet"/>
 </head>
+<body class="bg-light">
+    <div class="container mt-5">
 
-<body id="page-top">
-    <!-- Navegación lateral -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top" id="sideNav">
-        <span class="d-block d-lg-none">ASISTENCIA DE EDIFICIO</span>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarResponsive"
-            aria-controls="navbarResponsive" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span></button>
-        <div class="collapse navbar-collapse" id="navbarResponsive">
-            <ul class="navbar-nav">
-                <li class="nav-item"><a class="nav-link js-scroll-trigger" href="#Inicio">Inicio</a></li>
-                <li class="nav-item"><a class="nav-link js-scroll-trigger" href="?seccion=registrar#RegistroEntrada">Registro de entrada</a></li>
-                <li class="nav-item"><a class="nav-link js-scroll-trigger" href="?seccion=salida#SalidaEdificio">Salida del edificio</a></li>
-                <li class="nav-item"><a class="nav-link js-scroll-trigger" href="?seccion=listado#ListadoPersona">Listado persona</a></li>
-            </ul>
-        </div>
-    </nav>
+        <?php if (!isset($_SESSION['autenticado'])): ?>
+            <h2 class="mb-4">Inicio de Sesión</h2>
 
-    <!-- Contenido principal -->
-    <div class="container-fluid p-0">
-        <!-- Sección Inicio -->
-        <section class="resume-section" id="Inicio">
-            <div class="resume-section-content">
-                <h1 class="mb-0">MENÚ <span class="text-primary">Inicio</span></h1>
-                <p class="lead mb-5">EDIFICIO JOSÉ BONIFACIO 3063<br>BARRIO FLORES</p>
+            <?php if ($mensajeLogin): ?>
+                <div class="alert alert-danger"><?= $mensajeLogin ?></div>
+            <?php endif; ?>
+
+            <form method="POST">
+                <input type="hidden" name="login" />
+                <div class="mb-3">
+                    <label class="form-label">DNI (usuario)</label>
+                    <input type="text" class="form-control" name="usuario" required />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Contraseña</label>
+                    <input type="password" class="form-control" name="contrasena" required />
+                </div>
+                <button type="submit" class="btn btn-primary">Ingresar</button>
+            </form>
+
+            <hr class="my-5" />
+
+            <h2>Crear cuenta nueva</h2>
+            <?php if ($mensajeRegistroUsuario): ?>
+                <div class="alert alert-info"><?= $mensajeRegistroUsuario ?></div>
+            <?php endif; ?>
+            <form method="POST">
+                <input type="hidden" name="crear_usuario" />
+                <div class="mb-3">
+                    <label class="form-label">DNI (será tu usuario)</label>
+                    <input type="text" class="form-control" name="nuevo_usuario" required />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Contraseña</label>
+                    <input type="password" class="form-control" name="nueva_contrasena" required />
+                </div>
+                <button type="submit" class="btn btn-secondary">Crear Cuenta</button>
+            </form>
+
+        <?php else: ?>
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Registro de Visitas</h2>
+                <a href="?logout" class="btn btn-danger">Cerrar sesión</a>
             </div>
-        </section>
-        <hr class="m-0" />
 
-        <!-- Registro de Entrada -->
-        <?php if ($seccion === 'registrar'): ?>
-        <section class="resume-section" id="RegistroEntrada">
-            <div class="resume-section-content">
-                <h2 class="mb-5">Registro de Entrada</h2>
-                <form method="POST">
-                    <div class="mb-3">
-                        <label class="form-label">Nombre</label>
-                        <input type="text" class="form-control" name="nombre" required />
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Apellido</label>
-                        <input type="text" class="form-control" name="apellido" required />
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">DNI</label>
-                        <input type="text" class="form-control" name="dni" required />
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Motivo de Visita</label>
-                        <textarea class="form-control" name="motivo_visita" required></textarea>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Persona a Visitar</label>
-                        <input type="text" class="form-control" name="persona_visita" required />
-                    </div>
-                    <button type="submit" class="btn btn-primary" name="registrar">Registrar</button>
-                </form>
-            </div>
-        </section>
-        <hr class="m-0" />
-        <?php endif; ?>
+            <?php if ($mensajeRegistroVisita): ?>
+                <div class="alert alert-success"><?= $mensajeRegistroVisita ?></div>
+            <?php endif; ?>
 
-        <!-- Actualizar Salida -->
-        <?php if ($seccion === 'salida'): ?>
-        <section class="resume-section" id="SalidaEdificio">
-            <div class="resume-section-content">
-                <h2 class="mb-5">Actualizar Hora de Salida</h2>
-                <form method="POST">
-                    <div class="mb-3">
-                        <label class="form-label">DNI</label>
-                        <input type="text" class="form-control" name="dni_salida" required />
+            <form method="POST" class="mb-4">
+                <input type="hidden" name="registrar" />
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <input type="text" name="nombre" class="form-control" placeholder="Nombre" required />
                     </div>
-                    <button type="submit" class="btn btn-warning" name="actualizar">Actualizar</button>
-                </form>
-            </div>
-        </section>
-        <hr class="m-0" />
-        <?php endif; ?>
+                    <div class="col-md-6">
+                        <input type="text" name="apellido" class="form-control" placeholder="Apellido" required />
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" name="dni" class="form-control" placeholder="DNI" required />
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" name="motivo" class="form-control" placeholder="Motivo" required />
+                    </div>
+                    <div class="col-md-4">
+                        <input type="date" name="fecha" class="form-control" required />
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-success mt-3">Registrar Visita</button>
+            </form>
 
-        <!-- Listado de personas -->
-        <?php if ($seccion === 'listado'): ?>
-        <section class="resume-section" id="ListadoPersona">
-            <div class="resume-section-content">
-                <h2 class="mb-5">Listado de Invitados</h2>
-                <form method="GET">
-                    <input type="hidden" name="seccion" value="listado" />
-                    <div class="mb-3">
-                        <label class="form-label">Filtrar por</label>
-                        <select class="form-select" name="filtro">
-                            <option value="dni">DNI</option>
-                            <option value="fecha">Fecha</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Valor</label>
-                        <input type="text" class="form-control" name="valor" required />
-                    </div>
-                    <button type="submit" class="btn btn-info" name="filtrar">Filtrar</button>
-                </form>
-                <table class="table mt-3">
-                    <thead>
+            <h3 class="mt-5">Listado de Visitas</h3>
+            <table class="table table-striped table-hover mt-3">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Nombre</th>
+                        <th>Apellido</th>
+                        <th>DNI</th>
+                        <th>Motivo</th>
+                        <th>Fecha</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php while ($fila = $visitas->fetch_assoc()): ?>
                         <tr>
-                            <th>Nombre</th>
-                            <th>Apellido</th>
-                            <th>DNI</th>
-                            <th>Motivo</th>
-                            <th>Persona</th>
-                            <th>Ingreso</th>
-                            <th>Salida</th>
+                            <td><?= htmlspecialchars($fila["nombre"]) ?></td>
+                            <td><?= htmlspecialchars($fila["apellido"]) ?></td>
+                            <td><?= htmlspecialchars($fila["dni"]) ?></td>
+                            <td><?= htmlspecialchars($fila["motivo"]) ?></td>
+                            <td><?= htmlspecialchars($fila["fecha"]) ?></td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($personas as $persona): ?>
-                            <tr>
-                                <td><?= htmlspecialchars($persona['nombre']) ?></td>
-                                <td><?= htmlspecialchars($persona['apellido']) ?></td>
-                                <td><?= htmlspecialchars($persona['dni']) ?></td>
-                                <td><?= htmlspecialchars($persona['motivoVisita']) ?></td>
-                                <td><?= htmlspecialchars($persona['personaQueVisita']) ?></td>
-                                <td><?= htmlspecialchars($persona['ingreso']) ?></td>
-                                <td><?= $persona['egreso'] ? htmlspecialchars($persona['egreso']) : 'Pendiente' ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-        <hr class="m-0" />
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
         <?php endif; ?>
-    </div>
 
-    <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="js/scripts.js"></script>
+    </div>
 </body>
 </html>
-
-<?php
-$conexion->close();
-?>
